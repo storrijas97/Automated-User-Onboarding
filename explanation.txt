@@ -1,0 +1,49 @@
+IT Employee Lifecycle Automation System
+explanation.txt - Items Not Applicable at This Stage
+Author: Stephen Torrijas
+========================================
+
+2_unit_testing — NOT YET IMPLEMENTED
+--------------------------------------
+Unit tests have not been written at this stage of development. The
+project is currently at the mid-term demo milestone, where the focus
+has been on implementing all 15 functional requirements and verifying
+system behavior through manual end-to-end testing against a live
+OrangeHRM instance and Active Directory domain.
+
+Unit tests are planned for the final submission and will cover:
+- provisioningService.js and deprovisioningService.js (core business
+  logic and retry behavior)
+- OrangeHRMConnector.js (HR DB polling and change detection, with a
+  mocked MySQL connection)
+- ADConnector.js (LDAP operations, with a mocked ldapjs client)
+- notificationService.js (notification creation and config flag checks)
+- All model query methods (Employee, Task, AuditLog, etc.)
+
+Testing framework planned: Jest (Node.js), with jest-mock for
+mocking external dependencies (MySQL, ldapjs).
+
+3_integration_testing — NOT YET IMPLEMENTED
+---------------------------------------------
+Integration tests have not been written at this stage. They are
+planned for the final submission and will cover end-to-end flows
+(OrangeHRM change detection through to AD operation and audit log
+entry) using a dedicated test database instance.
+
+4_data_collection — NOT APPLICABLE
+-------------------------------------
+This project does not have a standalone data collection phase or
+script. Data enters the system through two mechanisms that are part
+of the core application:
+
+1. The OrangeHRM poller (server/scheduler/poller.js) continuously
+   syncs employee records from OrangeHRM's MySQL database into the
+   local it_lifecycle database. This is integral to the backend
+   server and runs automatically on startup.
+
+2. Active Directory account status is read on demand via LDAP when
+   an IT administrator opens an employee's detail view in the UI.
+
+Because data collection is embedded in the application's normal
+operation rather than a separate script or batch process, no
+standalone data collection programs exist to include in this folder.
