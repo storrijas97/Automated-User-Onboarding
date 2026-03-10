@@ -6,7 +6,7 @@ Author: Stephen Torrijas
 STATUS: Unit tests are planned for the final demo submission but are
 not yet implemented at this stage of development.
 
-See Not Applicable.txt in the main Demo folder for full details.
+See explanation.txt in the main Demo folder for full details.
 
 PLANNED COVERAGE (for final submission):
 - provisioningService.js - test account creation logic and retry behavior
