@@ -1,6 +1,15 @@
 const ldap = require('ldapjs');
 const { bind } = require('../config/ad');
 
+function escapeLdapFilter(value) {
+  return value
+    .replace(/\\/g, '\\5c')
+    .replace(/\*/g,  '\\2a')
+    .replace(/\(/g,  '\\28')
+    .replace(/\)/g,  '\\29')
+    .replace(/\0/g,  '\\00');
+}
+
 const BASE_DN = () => process.env.AD_BASE_DN || 'DC=company,DC=local';
 const USERS_OU = () => process.env.AD_USERS_OU || 'OU=Users,DC=company,DC=local';
 
@@ -30,6 +39,7 @@ const ADConnector = {
     if (jobTitle)       entry.title      = jobTitle;
     if (departmentName) entry.department = departmentName;
     if (company)        entry.company    = company;
+    if (employeeData.managerDn) entry.manager = employeeData.managerDn;
 
     return new Promise((resolve, reject) => {
       client.add(dn, entry, (err) => {
@@ -80,6 +90,7 @@ const ADConnector = {
       department: attrs.departmentName,
       company:    attrs.company,
       mail:       attrs.email,
+      manager:    attrs.managerDn,
     };
 
     const changes = Object.entries(attrMap)
@@ -176,7 +187,9 @@ const ADConnector = {
       });
     });
 
-    return Promise.allSettled(promises);
+    const results = await Promise.allSettled(promises);
+    client.destroy();
+    return results;
   },
 
   /**
@@ -188,7 +201,7 @@ const ADConnector = {
     const client = await bind();
     return new Promise((resolve, reject) => {
       const opts = {
-        filter: `(sAMAccountName=${username})`,
+        filter: `(sAMAccountName=${escapeLdapFilter(username)})`,
         scope: 'sub',
         attributes: ['dn'],
       };
@@ -207,7 +220,7 @@ const ADConnector = {
   async _getDNForUser(client, username) {
     return new Promise((resolve, reject) => {
       const opts = {
-        filter: `(sAMAccountName=${username})`,
+        filter: `(sAMAccountName=${escapeLdapFilter(username)})`,
         scope: 'sub',
         attributes: ['dn'],
       };
