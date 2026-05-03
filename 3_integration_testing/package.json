@@ -1,0 +1,22 @@
+{
+  "name": "it-lifecycle-integration-tests",
+  "version": "1.0.0",
+  "description": "Integration tests for IT Employee Lifecycle Automation System API",
+  "scripts": {
+    "test": "jest --runInBand"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "supertest": "^6.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "modulePaths": [
+      "<rootDir>/../../1_code/it-lifecycle-system/server/node_modules"
+    ]
+  }
+}

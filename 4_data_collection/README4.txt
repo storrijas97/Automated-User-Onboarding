@@ -5,7 +5,7 @@ Author: Stephen Torrijas
 
 STATUS: This project does not have a separate data collection phase.
 
-See explanation.txt in the main Demo folder for full details.
+See Not Applicable.txt in the main Demo folder for full details.
 
 The system's data comes from two live integrated sources:
 
