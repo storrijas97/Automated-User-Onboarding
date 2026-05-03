@@ -5,6 +5,13 @@ const { deprovisionEmployee } = require('../services/deprovisioningService');
 const Employee = require('../models/Employee');
 const Department = require('../models/Department');
 const SystemConfig = require('../models/SystemConfig');
+const ADAccount = require('../models/ADAccount');
+const ADConnector = require('../connectors/ADConnector');
+const Task = require('../models/Task');
+const TaskStep = require('../models/TaskStep');
+const AuditLog = require('../models/AuditLog');
+const RoleMapping = require('../models/RoleMapping');
+const resolveManagerDn = require('../utils/resolveManagerDn');
 
 // Sync status exposed for /api/sync/status
 const syncStatus = {
@@ -59,7 +66,7 @@ async function poll() {
         if (dbEmployee) {
           lastKnownState[empNumber] = dbEmployee.status;
           // Still sync profile data in case it changed in OrangeHRM
-          await syncEmployeeProfile(dbEmployee.id, hrmEmp).catch((err) =>
+          await syncEmployeeProfile(dbEmployee, hrmEmp).catch((err) =>
             console.error(`[Poller] Profile sync error for ${empNumber}:`, err.message)
           );
           continue;
@@ -82,7 +89,7 @@ async function poll() {
         // Already known employee — sync profile updates (name, job title, department)
         const dbEmployee = await Employee.findByOrangeHrmId(empNumber);
         if (dbEmployee) {
-          await syncEmployeeProfile(dbEmployee.id, hrmEmp).catch((err) =>
+          await syncEmployeeProfile(dbEmployee, hrmEmp).catch((err) =>
             console.error(`[Poller] Profile sync error for ${empNumber}:`, err.message)
           );
         }
@@ -107,21 +114,108 @@ async function poll() {
 }
 
 /**
- * Sync employee profile fields from OrangeHRM into the local DB.
- * Updates first_name, last_name, email, job_title, and department_id
- * only when values have actually changed.
+ * Diff OrangeHRM data against the current DB record, persist any changes,
+ * push updates to AD, and create a PROFILE_UPDATE task + audit log entry
+ * for anything that actually changed.
  */
-async function syncEmployeeProfile(employeeId, hrmEmp) {
-  const updates = {};
-  if (hrmEmp.firstName) updates.first_name = hrmEmp.firstName;
-  if (hrmEmp.lastName)  updates.last_name  = hrmEmp.lastName;
-  if (hrmEmp.email)     updates.email      = hrmEmp.email;
-  if (hrmEmp.jobTitle !== undefined) updates.job_title = hrmEmp.jobTitle;
-  if (hrmEmp.departmentId !== undefined) updates.department_id = hrmEmp.departmentId || null;
+async function syncEmployeeProfile(dbEmployee, hrmEmp) {
+  const employeeId = dbEmployee.id;
 
+  // ── 1. Detect changed scalar fields ─────────────────────────────────────────
+  const scalarFields = [
+    { label: 'First Name',  dbKey: 'first_name',           newVal: hrmEmp.firstName           || null },
+    { label: 'Last Name',   dbKey: 'last_name',            newVal: hrmEmp.lastName            || null },
+    { label: 'Email',       dbKey: 'email',                newVal: hrmEmp.email               || null },
+    { label: 'Job Title',   dbKey: 'job_title',            newVal: hrmEmp.jobTitle            || null },
+    { label: 'Company',     dbKey: 'company',              newVal: hrmEmp.company             || null },
+    { label: 'Supervisor',  dbKey: 'supervisor_emp_number', newVal: hrmEmp.supervisorEmpNumber || null },
+  ];
+
+  const updates = {};
+  const changedLabels = [];
+
+  for (const f of scalarFields) {
+    const oldStr = dbEmployee[f.dbKey] == null ? null : String(dbEmployee[f.dbKey]);
+    const newStr = f.newVal == null ? null : String(f.newVal);
+    if (oldStr !== newStr) {
+      updates[f.dbKey] = f.newVal;
+      changedLabels.push(`${f.label}: "${dbEmployee[f.dbKey] ?? ''}" → "${f.newVal ?? ''}"`);
+    }
+  }
+
+  // Department: compare by ID, display by name
+  const oldDeptId = dbEmployee.department_id == null ? null : String(dbEmployee.department_id);
+  const newDeptId = hrmEmp.departmentId      == null ? null : String(hrmEmp.departmentId);
+  if (oldDeptId !== newDeptId) {
+    updates.department_id = hrmEmp.departmentId || null;
+    changedLabels.push(`Department → "${hrmEmp.departmentName ?? ''}"`);
+  }
+
+  // ── 2. Push to Active Directory first ────────────────────────────────────────
+  // AD is attempted before the DB write so that a failed AD update leaves the DB
+  // unchanged — the next poll cycle will re-detect the diff and retry.
+  const adAccount = await ADAccount.findByEmployeeId(employeeId);
+  if (!adAccount || adAccount.status !== 'ACTIVE') return;
+
+  const company = hrmEmp.company || process.env.AD_COMPANY || '';
+  const managerDn = await resolveManagerDn(hrmEmp.supervisorEmpNumber);
+  await ADConnector.updateUserAttributes(adAccount.username, {
+    email:          hrmEmp.email          || null,
+    jobTitle:       hrmEmp.jobTitle        || null,
+    departmentName: hrmEmp.departmentName  || null,
+    company:        company                || null,
+    managerDn:      managerDn              || null,
+  });
+
+  // ── 3. Persist local DB changes (only after AD succeeds) ─────────────────────
   if (Object.keys(updates).length > 0) {
     await Employee.update(employeeId, updates);
   }
+
+  // ── 4. Sync group memberships based on current role mappings ─────────────────
+  // Runs every cycle so newly added mappings are applied to existing employees.
+  const effectiveDeptId = updates.department_id ?? dbEmployee.department_id;
+  const effectiveTitle  = updates.job_title     ?? dbEmployee.job_title;
+  if (effectiveDeptId && effectiveTitle) {
+    const mappings = await RoleMapping.findByDepartmentAndTitle(effectiveDeptId, effectiveTitle);
+    for (const mapping of mappings) {
+      await ADConnector.addToGroup(adAccount.username, mapping.ad_dn).catch((err) => {
+        // "Already a member" errors are expected when the employee is already in the group
+        if (!/already/i.test(err.message)) {
+          console.warn(`[Poller] Group sync for ${adAccount.username} → ${mapping.ad_dn}: ${err.message}`);
+        }
+      });
+    }
+  }
+
+  // ── 5. Task + audit log (only when something actually changed) ───────────────
+  if (changedLabels.length === 0) return;
+
+  const fullName = `${hrmEmp.firstName} ${hrmEmp.lastName}`;
+  const taskId = await Task.create({
+    employee_id: employeeId,
+    type:        'PROFILE_UPDATE',
+    status:      'IN_PROGRESS',
+    priority:    'LOW',
+  });
+
+  for (const change of changedLabels) {
+    await TaskStep.create({
+      task_id:     taskId,
+      action_type: 'UPDATE_AD_ATTRIBUTE',
+      status:      'SUCCESS',
+      detail:      change,
+    });
+  }
+
+  await Task.updateStatus(taskId, 'COMPLETED', new Date());
+
+  await AuditLog.create({
+    actor:  'system',
+    action: 'EMPLOYEE_PROFILE_UPDATED',
+    target: adAccount.username,
+    detail: `Profile sync for ${fullName} (emp #${hrmEmp.empNumber}): ${changedLabels.join('; ')}`,
+  });
 }
 
 async function startPoller() {
