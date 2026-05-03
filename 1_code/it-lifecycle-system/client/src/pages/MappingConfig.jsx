@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import {
   Typography, Box, Paper, Button, Table, TableHead, TableRow,
-  TableCell, TableBody, Dialog, DialogTitle, DialogContent,
-  DialogActions, TextField, MenuItem, CircularProgress, IconButton,
+  TableCell, TableBody, Dialog, DialogTitle, DialogContent, DialogContentText,
+  DialogActions, TextField, MenuItem, CircularProgress, IconButton, Alert,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -10,6 +10,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import apiClient from '../api/client';
 
 const EMPTY_FORM = { department_id: '', job_title: '', security_group_id: '' };
+const EMPTY_GROUP_FORM = { name: '', ad_dn: '' };
 
 export default function MappingConfig() {
   const [mappings, setMappings] = useState([]);
@@ -17,8 +18,12 @@ export default function MappingConfig() {
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
-  const [editId, setEditId] = useState(null); // null = create mode
+  const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [groupForm, setGroupForm] = useState(EMPTY_GROUP_FORM);
+  const [groupError, setGroupError] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -60,15 +65,38 @@ export default function MappingConfig() {
   async function handleDelete(id) {
     await apiClient.delete(`/mappings/${id}`);
     setMappings((prev) => prev.filter((m) => m.id !== id));
+    setDeleteConfirmId(null);
+  }
+
+  async function handleAddGroup() {
+    setGroupError('');
+    if (!groupForm.name || !groupForm.ad_dn) {
+      setGroupError('Both Name and AD Distinguished Name are required.');
+      return;
+    }
+    try {
+      await apiClient.post('/mappings/groups', groupForm);
+      const res = await apiClient.get('/mappings/groups');
+      setGroups(res.data || []);
+      setGroupOpen(false);
+      setGroupForm(EMPTY_GROUP_FORM);
+    } catch (err) {
+      setGroupError(err.response?.data?.error || 'Failed to create group.');
+    }
   }
 
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
         <Typography variant="h4">Mapping Configuration</Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-          Add Mapping
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" startIcon={<AddIcon />} onClick={() => { setGroupForm(EMPTY_GROUP_FORM); setGroupError(''); setGroupOpen(true); }}>
+            Add Security Group
+          </Button>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+            Add Mapping
+          </Button>
+        </Box>
       </Box>
 
       <Paper>
@@ -103,7 +131,7 @@ export default function MappingConfig() {
                       <IconButton size="small" onClick={() => openEdit(m)}>
                         <EditIcon fontSize="small" />
                       </IconButton>
-                      <IconButton size="small" color="error" onClick={() => handleDelete(m.id)}>
+                      <IconButton size="small" color="error" onClick={() => setDeleteConfirmId(m.id)}>
                         <DeleteIcon fontSize="small" />
                       </IconButton>
                     </TableCell>
@@ -114,6 +142,39 @@ export default function MappingConfig() {
           </Table>
         )}
       </Paper>
+
+      <Dialog open={groupOpen} onClose={() => setGroupOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Add Security Group</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          {groupError && <Alert severity="error">{groupError}</Alert>}
+          <TextField
+            label="Group Name" value={groupForm.name} fullWidth
+            onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
+            placeholder="e.g. Engineers"
+          />
+          <TextField
+            label="AD Distinguished Name" value={groupForm.ad_dn} fullWidth
+            onChange={(e) => setGroupForm({ ...groupForm, ad_dn: e.target.value })}
+            placeholder="e.g. CN=Engineers,OU=Groups,DC=company,DC=local"
+            helperText="Full LDAP DN of the group in Active Directory"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setGroupOpen(false)}>Cancel</Button>
+          <Button variant="contained" onClick={handleAddGroup}>Add Group</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={deleteConfirmId !== null} onClose={() => setDeleteConfirmId(null)}>
+        <DialogTitle>Delete Mapping</DialogTitle>
+        <DialogContent>
+          <DialogContentText>Are you sure you want to delete this mapping? This cannot be undone.</DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteConfirmId(null)}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={() => handleDelete(deleteConfirmId)}>Delete</Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>{editId ? 'Edit Role Mapping' : 'Add Role Mapping'}</DialogTitle>
